@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CardRoyal – Login</title>
+  <meta name="description" content="Login to CardRoyal, the multiplayer card game platform.">
+  <link rel="stylesheet" href="/css/main.css">
+  <style>
+    body { background: var(--bg); }
+    .particles { position: fixed; inset: 0; pointer-events: none; overflow: hidden; z-index: 0; }
+    .particle {
+      position: absolute; width: 6px; height: 6px; border-radius: 50%;
+      background: var(--gold); opacity: 0; animation: float linear infinite;
+    }
+    @keyframes float {
+      0%   { transform: translateY(100vh) scale(0); opacity: 0.6; }
+      100% { transform: translateY(-10vh)  scale(1); opacity: 0; }
+    }
+    .suits { font-size: 2.5rem; display: flex; justify-content: center; gap: 16px; margin-bottom: 8px; opacity: 0.6; }
+    .suits span:nth-child(1),.suits span:nth-child(4) { color: var(--text2); }
+    .suits span:nth-child(2),.suits span:nth-child(3) { color: var(--red); }
+  </style>
+</head>
+<body>
+  <div class="bg-glow"></div>
+  <div class="particles" id="particles"></div>
+
+  <div class="center-page page-content">
+    <div class="panel panel-sm">
+      <div class="brand">
+        <div class="suits"><span>♠</span><span>♥</span><span>♦</span><span>♣</span></div>
+        <h1>CardRoyal</h1>
+        <p>Multiplayer Card Game Platform</p>
+      </div>
+
+      <div class="alert alert-error" id="err-msg"></div>
+
+      <form id="login-form" autocomplete="off">
+        <div class="form-group">
+          <label for="username">Username</label>
+          <input type="text" id="username" placeholder="Enter your username" required autocomplete="username">
+        </div>
+        <div class="form-group">
+          <label for="password">Password</label>
+          <input type="password" id="password" placeholder="Enter your password" required autocomplete="current-password">
+        </div>
+        <button type="submit" class="btn btn-gold btn-full" id="login-btn">Login</button>
+      </form>
+
+      <hr class="divider">
+      <p style="text-align:center;color:var(--text2);font-size:0.9rem;">
+        Don't have an account? <a href="/register">Register</a>
+      </p>
+    </div>
+  </div>
+
+  <script>
+    // Floating particles
+    const pc = document.getElementById('particles');
+    for (let i = 0; i < 20; i++) {
+      const p = document.createElement('div');
+      p.className = 'particle';
+      p.style.left = Math.random() * 100 + '%';
+      p.style.animationDuration = (6 + Math.random() * 10) + 's';
+      p.style.animationDelay    = (Math.random() * 8) + 's';
+      p.style.width = p.style.height = (3 + Math.random() * 5) + 'px';
+      pc.appendChild(p);
+    }
+
+    // Redirect if already logged in
+    const token = localStorage.getItem('token');
+    if (token) {
+      fetch('/api/auth/me', { headers: { Authorization: 'Bearer ' + token } })
+        .then(r => r.ok ? r.json() : null)
+        .then(u => { if (u) redirectByRole(u.role); })
+        .catch(() => {});
+    }
+
+    function redirectByRole(role) {
+      if      (role === 'admin')   location.href = '/admin';
+      else if (role === 'manager') location.href = '/manager';
+      else                         location.href = '/lobby';
+    }
+
+    const form   = document.getElementById('login-form');
+    const errMsg = document.getElementById('err-msg');
+    const btn    = document.getElementById('login-btn');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errMsg.classList.remove('show');
+      btn.disabled = true; btn.textContent = 'Logging in…';
+
+      try {
+        const res  = await fetch('/api/auth/login', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: document.getElementById('username').value.trim(), password: document.getElementById('password').value })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message);
+        localStorage.setItem('token', data.token);
+        localStorage.setItem('user',  JSON.stringify(data.user));
+        redirectByRole(data.user.role);
+      } catch (err) {
+        errMsg.textContent = err.message;
+        errMsg.classList.add('show');
+        btn.disabled = false; btn.textContent = 'Login';
+      }
+    });
+  </script>
+</body>
+</html>

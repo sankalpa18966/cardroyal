@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CardRoyal – Admin</title>
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="stylesheet" href="/css/dashboard.css">
+</head>
+<body>
+<div class="bg-glow"></div>
+<div class="dash-layout">
+
+  <!-- NAV -->
+  <nav class="nav" style="grid-column:1/-1;">
+    <span class="nav-brand">🃏 CardRoyal <span style="font-size:0.7rem;font-weight:400;color:var(--gold);margin-left:4px;">ADMIN</span></span>
+    <div class="nav-right">
+      <span class="nav-user" id="nav-user"></span>
+      <button class="btn btn-ghost btn-sm" onclick="logout()">Logout</button>
+    </div>
+  </nav>
+
+  <!-- SIDEBAR -->
+  <aside class="dash-sidebar">
+    <button class="dash-nav-item active" data-section="users" onclick="showSection('users',this)"><span class="nav-icon">👥</span> Users</button>
+    <button class="dash-nav-item" data-section="stats"  onclick="showSection('stats',this)"><span class="nav-icon">📊</span> Stats</button>
+    <hr class="divider" style="margin:8px 0;">
+    <button class="dash-nav-item" onclick="location.href='/lobby'"><span class="nav-icon">🎮</span> Lobby</button>
+  </aside>
+
+  <!-- MAIN -->
+  <main class="dash-main page-content">
+
+    <!-- Users Section -->
+    <div id="section-users" class="dash-section active">
+      <div class="page-header">
+        <div><h2>User Management</h2><p>Manage all registered users</p></div>
+        <button class="btn btn-ghost btn-sm" onclick="loadUsers()">↻ Refresh</button>
+      </div>
+
+      <div class="alert alert-success" id="user-ok"></div>
+      <div class="alert alert-error"   id="user-err"></div>
+
+      <div class="search-bar">
+        <input type="text" class="search-input" id="user-search" placeholder="🔍 Search users…" oninput="filterUsers()">
+      </div>
+
+      <div class="table-wrap">
+        <table class="data-table" id="users-table">
+          <thead><tr>
+            <th>Player ID</th><th>Username</th><th>Email</th><th>Role</th>
+            <th>Points</th><th>Status</th><th>Actions</th>
+          </tr></thead>
+          <tbody id="users-tbody"><tr><td colspan="7" style="text-align:center;padding:40px;color:var(--text3);">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Stats Section -->
+    <div id="section-stats" class="dash-section">
+      <div class="page-header"><div><h2>Platform Stats</h2><p>Overview of the platform</p></div></div>
+      <div class="stats-grid" id="stats-grid">
+        <div class="stat-card"><div class="stat-icon">👥</div><div class="stat-value" id="stat-total">—</div><div class="stat-label">Total Users</div></div>
+        <div class="stat-card"><div class="stat-icon">🎮</div><div class="stat-value" id="stat-players">—</div><div class="stat-label">Players</div></div>
+        <div class="stat-card"><div class="stat-icon">🛠️</div><div class="stat-value" id="stat-managers">—</div><div class="stat-label">Managers</div></div>
+        <div class="stat-card"><div class="stat-icon">🚫</div><div class="stat-value" id="stat-banned">—</div><div class="stat-label">Banned</div></div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script>
+const token = localStorage.getItem('token');
+const ME    = JSON.parse(localStorage.getItem('user') || 'null');
+if (!token || !ME || ME.role !== 'admin') { location.href = '/'; }
+document.getElementById('nav-user').textContent = ME.username;
+
+let allUsers = [];
+function logout() { localStorage.clear(); location.href = '/'; }
+function showSection(id, btn) {
+  document.querySelectorAll('.dash-section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.dash-nav-item').forEach(b => b.classList.remove('active'));
+  document.getElementById('section-' + id).classList.add('active');
+  btn.classList.add('active');
+  if (id === 'stats') loadStats();
+}
+
+async function api(method, url, body) {
+  const r = await fetch(url, { method, headers: { 'Content-Type':'application/json', Authorization:'Bearer '+token }, body: body ? JSON.stringify(body) : undefined });
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.message);
+  return d;
+}
+
+async function loadUsers() {
+  try {
+    allUsers = await api('GET', '/api/admin/users');
+    renderUsers(allUsers);
+    loadStats();
+  } catch (e) { showMsg('user-err', e.message); }
+}
+
+function filterUsers() {
+  const q = document.getElementById('user-search').value.toLowerCase();
+  renderUsers(allUsers.filter(u => u.username.toLowerCase().includes(q) || u.email.toLowerCase().includes(q) || u.playerId.toLowerCase().includes(q)));
+}
+
+function renderUsers(users) {
+  const tbody = document.getElementById('users-tbody');
+  if (!users.length) { tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:40px;color:var(--text3);">No users found</td></tr>'; return; }
+  tbody.innerHTML = users.map(u => `
+    <tr>
+      <td><code style="font-size:0.78rem;color:var(--text2);">${u.playerId}</code></td>
+      <td style="font-weight:600;">${esc(u.username)}</td>
+      <td style="color:var(--text2);font-size:0.85rem;">${esc(u.email)}</td>
+      <td><span class="badge badge-${u.role}">${u.role}</span></td>
+      <td style="color:var(--gold);font-weight:700;">🏆 ${u.points}</td>
+      <td>${u.isBanned ? '<span class="badge badge-banned">Banned</span>' : '<span class="badge badge-playing">Active</span>'}</td>
+      <td>
+        <div class="actions">
+          ${u.role !== 'admin' ? `
+            ${u.role === 'player' ? `<button class="btn btn-sm btn-purple" style="background:rgba(155,109,255,0.2);color:var(--purple);border:1px solid rgba(155,109,255,0.3);" onclick="promote('${u._id}','${u.username}')">Promote</button>` : ''}
+            ${u.role === 'manager' ? `<button class="btn btn-sm btn-ghost" onclick="demote('${u._id}','${u.username}')">Demote</button>` : ''}
+            <button class="btn btn-sm btn-red" style="opacity:0.75;" onclick="deleteUser('${u._id}','${u.username}')">Delete</button>
+          ` : '<span style="color:var(--text3);font-size:0.8rem;">—</span>'}
+        </div>
+      </td>
+    </tr>`).join('');
+}
+
+async function promote(id, name) {
+  if (!confirm(`Promote ${name} to Manager?`)) return;
+  try { await api('PATCH', `/api/admin/users/${id}/promote`); showMsg('user-ok', name + ' promoted to manager!'); loadUsers(); }
+  catch (e) { showMsg('user-err', e.message); }
+}
+async function demote(id, name) {
+  if (!confirm(`Demote ${name} to Player?`)) return;
+  try { await api('PATCH', `/api/admin/users/${id}/demote`); showMsg('user-ok', name + ' demoted to player.'); loadUsers(); }
+  catch (e) { showMsg('user-err', e.message); }
+}
+async function deleteUser(id, name) {
+  if (!confirm(`Delete user ${name}? This is permanent.`)) return;
+  try { await api('DELETE', `/api/admin/users/${id}`); showMsg('user-ok', name + ' deleted.'); loadUsers(); }
+  catch (e) { showMsg('user-err', e.message); }
+}
+
+function loadStats() {
+  const total    = allUsers.length;
+  const players  = allUsers.filter(u => u.role === 'player').length;
+  const managers = allUsers.filter(u => u.role === 'manager').length;
+  const banned   = allUsers.filter(u => u.isBanned).length;
+  document.getElementById('stat-total').textContent    = total;
+  document.getElementById('stat-players').textContent  = players;
+  document.getElementById('stat-managers').textContent = managers;
+  document.getElementById('stat-banned').textContent   = banned;
+}
+
+function showMsg(id, msg) {
+  const el = document.getElementById(id); el.textContent = msg; el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 4000);
+}
+function esc(s) { const d=document.createElement('div');d.textContent=s;return d.innerHTML; }
+
+loadUsers();
+</script>
+</body>
+</html>

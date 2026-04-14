@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CardRoyal – Manager</title>
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="stylesheet" href="/css/dashboard.css">
+</head>
+<body>
+<div class="bg-glow"></div>
+<div class="dash-layout">
+
+  <nav class="nav" style="grid-column:1/-1;">
+    <span class="nav-brand">🃏 CardRoyal <span style="font-size:0.7rem;font-weight:400;color:var(--purple);margin-left:4px;">MANAGER</span></span>
+    <div class="nav-right">
+      <span class="nav-user" id="nav-user"></span>
+      <button class="btn btn-ghost btn-sm" onclick="logout()">Logout</button>
+    </div>
+  </nav>
+
+  <aside class="dash-sidebar">
+    <button class="dash-nav-item active" data-section="players" onclick="showSection('players',this)"><span class="nav-icon">👥</span> Players</button>
+    <button class="dash-nav-item" data-section="rooms" onclick="showSection('rooms',this)"><span class="nav-icon">🚪</span> Rooms</button>
+    <button class="dash-nav-item" data-section="points" onclick="showSection('points',this)"><span class="nav-icon">🏆</span> Add Points</button>
+    <hr class="divider" style="margin:8px 0;">
+    <button class="dash-nav-item" onclick="location.href='/lobby'"><span class="nav-icon">🎮</span> Lobby</button>
+  </aside>
+
+  <main class="dash-main page-content">
+
+    <!-- Players -->
+    <div id="section-players" class="dash-section active">
+      <div class="page-header">
+        <div><h2>Players</h2><p>Manage players – ban/unban accounts</p></div>
+        <button class="btn btn-ghost btn-sm" onclick="loadPlayers()">↻ Refresh</button>
+      </div>
+      <div class="alert alert-success" id="pl-ok"></div>
+      <div class="alert alert-error"   id="pl-err"></div>
+      <div class="search-bar">
+        <input class="search-input" type="text" id="pl-search" placeholder="🔍 Search players…" oninput="filterPlayers()">
+      </div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th>Player ID</th><th>Username</th><th>Points</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody id="players-tbody"><tr><td colspan="5" style="text-align:center;padding:40px;color:var(--text3);">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Rooms -->
+    <div id="section-rooms" class="dash-section">
+      <div class="page-header">
+        <div><h2>Active Rooms</h2><p>Monitor and manage game rooms</p></div>
+        <button class="btn btn-ghost btn-sm" onclick="loadRooms()">↻ Refresh</button>
+      </div>
+      <div class="alert alert-success" id="rm-ok"></div>
+      <div id="rooms-list">Loading…</div>
+    </div>
+
+    <!-- Add Points -->
+    <div id="section-points" class="dash-section">
+      <div class="page-header"><div><h2>Add / Remove Points</h2><p>Adjust player balance by Player ID</p></div></div>
+      <div class="alert alert-success" id="pt-ok"></div>
+      <div class="alert alert-error"   id="pt-err"></div>
+      <div class="panel" style="max-width:480px;">
+        <div class="form-group">
+          <label for="pt-playerid">Player ID</label>
+          <input type="text" id="pt-playerid" placeholder="e.g. PA1B2C3D4" style="text-transform:uppercase;">
+        </div>
+        <div class="form-group">
+          <label for="pt-amount">Amount</label>
+          <input type="number" id="pt-amount" placeholder="Number of points" min="1">
+        </div>
+        <div class="form-group">
+          <label>Operation</label>
+          <div style="display:flex;gap:10px;margin-top:4px;">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.9rem;text-transform:none;color:var(--text);">
+              <input type="radio" name="op" value="add" checked> Add points
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.9rem;text-transform:none;color:var(--text);">
+              <input type="radio" name="op" value="subtract"> Remove points
+            </label>
+          </div>
+        </div>
+        <button class="btn btn-gold btn-full" onclick="adjustPoints()">Apply</button>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const token = localStorage.getItem('token');
+const ME    = JSON.parse(localStorage.getItem('user') || 'null');
+if (!token || !ME || !['admin','manager'].includes(ME.role)) { location.href = '/'; }
+document.getElementById('nav-user').textContent = ME.username;
+
+let allPlayers = [];
+const socket = io({ auth: { token } });
+
+function logout() { localStorage.clear(); location.href = '/'; }
+
+function showSection(id, btn) {
+  document.querySelectorAll('.dash-section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.dash-nav-item').forEach(b => b.classList.remove('active'));
+  document.getElementById('section-' + id).classList.add('active');
+  btn.classList.add('active');
+  if (id === 'rooms') loadRooms();
+  if (id === 'players') loadPlayers();
+}
+
+async function api(method, url, body) {
+  const r = await fetch(url, { method, headers: { 'Content-Type':'application/json', Authorization:'Bearer '+token }, body: body ? JSON.stringify(body) : undefined });
+  const d = await r.json(); if (!r.ok) throw new Error(d.message); return d;
+}
+function esc(s) { const d=document.createElement('div');d.textContent=s;return d.innerHTML; }
+function showMsg(id, msg) { const el=document.getElementById(id);el.textContent=msg;el.classList.add('show');setTimeout(()=>el.classList.remove('show'),4000); }
+
+// ── Players ──
+async function loadPlayers() {
+  try { allPlayers = await api('GET', '/api/manager/users'); renderPlayers(allPlayers); }
+  catch (e) { showMsg('pl-err', e.message); }
+}
+
+function filterPlayers() {
+  const q = document.getElementById('pl-search').value.toLowerCase();
+  renderPlayers(allPlayers.filter(u => u.username.toLowerCase().includes(q) || u.playerId.toLowerCase().includes(q)));
+}
+
+function renderPlayers(players) {
+  document.getElementById('players-tbody').innerHTML = players.length === 0
+    ? '<tr><td colspan="5" style="text-align:center;padding:40px;color:var(--text3);">No players</td></tr>'
+    : players.map(p => `
+      <tr>
+        <td><code style="font-size:0.78rem;color:var(--text2);">${p.playerId}</code></td>
+        <td style="font-weight:600;">${esc(p.username)}</td>
+        <td style="color:var(--gold);font-weight:700;">🏆 ${p.points}</td>
+        <td>${p.isBanned ? '<span class="badge badge-banned">Banned</span>' : '<span class="badge badge-playing">Active</span>'}</td>
+        <td><div class="actions">
+          <button class="btn btn-sm ${p.isBanned ? 'btn-green' : 'btn-red'}" style="opacity:0.8;" onclick="toggleBan('${p._id}','${p.username}',${p.isBanned})">
+            ${p.isBanned ? 'Unban' : 'Ban'}
+          </button>
+        </div></td>
+      </tr>`).join('');
+}
+
+async function toggleBan(id, name, isBanned) {
+  if (!confirm(`${isBanned ? 'Unban' : 'Ban'} ${name}?`)) return;
+  try { await api('PATCH', `/api/manager/users/${id}/ban`); showMsg('pl-ok', name + (isBanned ? ' unbanned.' : ' banned.')); loadPlayers(); }
+  catch (e) { showMsg('pl-err', e.message); }
+}
+
+// ── Rooms ──
+async function loadRooms() {
+  try {
+    const rooms = await api('GET', '/api/manager/rooms');
+    const el = document.getElementById('rooms-list');
+    if (!rooms.length) { el.innerHTML = '<p style="color:var(--text3);padding:40px 0;text-align:center;">No active rooms</p>'; return; }
+    el.innerHTML = rooms.map(r => `
+      <div class="room-card">
+        <div>
+          <div class="room-card-name">${esc(r.name)}</div>
+          <div class="room-card-code">${r.roomCode}</div>
+          <div class="room-card-meta">👥 ${r.players.length}/${r.maxPlayers} players · Phase: ${r.gameState?.phase || 'waiting'}</div>
+        </div>
+        <div class="room-card-actions">
+          <details style="position:relative;">
+            <summary class="btn btn-sm btn-ghost" style="cursor:pointer;list-style:none;">Kick…</summary>
+            <div style="position:absolute;right:0;top:32px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:8px;min-width:180px;z-index:10;">
+              ${r.players.map(p => `<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;gap:12px;">
+                <span style="font-size:0.82rem;">${esc(p.username)}</span>
+                <button class="btn btn-sm btn-red" style="opacity:0.7;padding:4px 8px;" onclick="kickPlayer('${r.roomCode}','${p.userId}','${p.username}')">Kick</button>
+              </div>`).join('')}
+            </div>
+          </details>
+        </div>
+      </div>`).join('');
+  } catch (e) { document.getElementById('rooms-list').innerHTML = '<p style="color:var(--red);">Error: ' + e.message + '</p>'; }
+}
+
+function kickPlayer(roomCode, userId, name) {
+  if (!confirm('Kick ' + name + ' from room?')) return;
+  socket.emit('manager-kick', { roomCode, userId });
+  showMsg('rm-ok', name + ' kicked.');
+  setTimeout(loadRooms, 500);
+}
+
+// ── Points ──
+async function adjustPoints() {
+  const playerId  = document.getElementById('pt-playerid').value.trim().toUpperCase();
+  const amount    = document.getElementById('pt-amount').value;
+  const operation = document.querySelector('input[name="op"]:checked').value;
+  if (!playerId || !amount) { showMsg('pt-err', 'Fill in all fields'); return; }
+  try {
+    const d = await api('POST', '/api/manager/users/points', { playerId, amount: parseInt(amount), operation });
+    showMsg('pt-ok', `${d.username}: now has ${d.points} points`);
+    document.getElementById('pt-amount').value = '';
+  } catch (e) { showMsg('pt-err', e.message); }
+}
+
+loadPlayers();
+</script>
+</body>
+</html>

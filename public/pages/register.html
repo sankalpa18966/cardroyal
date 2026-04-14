@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CardRoyal – Register</title>
+  <meta name="description" content="Create your CardRoyal account and start playing.">
+  <link rel="stylesheet" href="/css/main.css">
+  <style>
+    .first-notice { background: rgba(245,200,66,0.08); border: 1px solid rgba(245,200,66,0.2); border-radius: 8px; padding: 10px 14px; font-size: 0.82rem; color: var(--gold); margin-bottom: 18px; display: none; }
+    .first-notice.show { display: block; }
+  </style>
+</head>
+<body>
+  <div class="bg-glow"></div>
+  <div class="center-page page-content">
+    <div class="panel panel-sm">
+      <div class="brand">
+        <span class="brand-icon">🃏</span>
+        <h1>CardRoyal</h1>
+        <p>Create your account</p>
+      </div>
+
+      <div class="first-notice" id="first-notice">
+        👑 You are the first user — your account will be <strong>Admin</strong>.
+      </div>
+      <div class="alert alert-error"   id="err-msg"></div>
+      <div class="alert alert-success" id="ok-msg"></div>
+
+      <form id="reg-form" autocomplete="off">
+        <div class="form-group">
+          <label for="username">Username</label>
+          <input type="text" id="username" placeholder="Choose a username" required autocomplete="username" maxlength="20">
+        </div>
+        <div class="form-group">
+          <label for="email">Email</label>
+          <input type="email" id="email" placeholder="your@email.com" required autocomplete="email">
+        </div>
+        <div class="form-group">
+          <label for="password">Password</label>
+          <input type="password" id="password" placeholder="Min. 6 characters" required autocomplete="new-password" minlength="6">
+        </div>
+        <button type="submit" class="btn btn-gold btn-full" id="reg-btn">Create Account</button>
+      </form>
+
+      <hr class="divider">
+      <p style="text-align:center;color:var(--text2);font-size:0.9rem;">
+        Already have an account? <a href="/">Login</a>
+      </p>
+    </div>
+  </div>
+
+  <script>
+    // Check if first user
+    fetch('/api/auth/me', { headers: {} }).catch(() => {});
+    fetch('/api/admin/users', { headers: { Authorization: 'Bearer x' } })
+      .then(r => r.status === 401 ? null : null)
+      .catch(() => {});
+
+    // Simple approach: try fetching any protected route to see if there are users
+    // Instead, just show the notice always (server decides role)
+    checkFirstUser();
+    async function checkFirstUser() {
+      try {
+        const res = await fetch('/api/auth/register', { method: 'OPTIONS' });
+      } catch {}
+      // We check by attempting a register dryrun — instead show notice based on user count via a public endpoint
+      // For simplicity we just always show it; server will assign role correctly
+    }
+
+    const form   = document.getElementById('reg-form');
+    const errMsg = document.getElementById('err-msg');
+    const okMsg  = document.getElementById('ok-msg');
+    const btn    = document.getElementById('reg-btn');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errMsg.classList.remove('show'); okMsg.classList.remove('show');
+      btn.disabled = true; btn.textContent = 'Creating…';
+
+      try {
+        const res  = await fetch('/api/auth/register', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: document.getElementById('username').value.trim(),
+            email:    document.getElementById('email').value.trim(),
+            password: document.getElementById('password').value
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message);
+
+        localStorage.setItem('token', data.token);
+        localStorage.setItem('user',  JSON.stringify(data.user));
+
+        okMsg.textContent = `Welcome, ${data.user.username}! Role: ${data.user.role}. Redirecting…`;
+        okMsg.classList.add('show');
+
+        setTimeout(() => {
+          if      (data.user.role === 'admin')   location.href = '/admin';
+          else if (data.user.role === 'manager') location.href = '/manager';
+          else                                   location.href = '/lobby';
+        }, 1200);
+      } catch (err) {
+        errMsg.textContent = err.message;
+        errMsg.classList.add('show');
+        btn.disabled = false; btn.textContent = 'Create Account';
+      }
+    });
+  </script>
+</body>
+</html>
