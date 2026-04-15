@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const { randomInt } = require('crypto');
 const Room = require('../models/Room');
 const User = require('../models/User');
 
@@ -12,10 +13,16 @@ const createDeck = () => {
   return deck;
 };
 
+// Cryptographically secure Fisher-Yates shuffle
 const shuffleDeck = (deck) => {
   const d = [...deck];
   for (let i = d.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = randomInt(0, i + 1); // crypto-secure: range [0, i+1)
+    [d[i], d[j]] = [d[j], d[i]];
+  }
+  // Extra pass: re-shuffle with a fresh crypto random seed for added entropy
+  for (let i = d.length - 1; i > 0; i--) {
+    const j = randomInt(0, i + 1);
     [d[i], d[j]] = [d[j], d[i]];
   }
   return d;
@@ -218,7 +225,7 @@ const setupGameHandler = (io) => {
             clearTimer(roomCode);
             const r = await Room.findOne({ roomCode });
             if (r && r.gameState.phase === 'choosing') {
-              const auto = RANKS[Math.floor(Math.random() * RANKS.length)];
+              const auto = RANKS[randomInt(0, RANKS.length)];
               r.gameState.chosenValue = auto;
               r.gameState.phase = 'cutting';
               await r.save();
@@ -249,7 +256,8 @@ const setupGameHandler = (io) => {
     });
 
     // ── Cut Deck ──────────────────────────────────────────────────────────────
-    socket.on('cut-deck', async ({ roomCode, cutIndex }) => {
+    // cutIndex from client is IGNORED — server generates a secure random cut
+    socket.on('cut-deck', async ({ roomCode }) => {
       try {
         const room = await Room.findOne({ roomCode });
         if (!room || room.gameState.phase !== 'cutting') return;
@@ -258,12 +266,13 @@ const setupGameHandler = (io) => {
           return socket.emit('error', { message: 'Not your turn to cut' });
 
         const deck = room.gameState.deck;
-        const ci = Math.max(1, Math.min(parseInt(cutIndex) || 1, deck.length - 1));
+        // Server-side cryptographically secure random cut point [1, deck.length-1]
+        const ci = randomInt(1, deck.length);
         room.gameState.deck = [...deck.slice(ci), ...deck.slice(0, ci)];
         room.gameState.phase = 'betting';
         await room.save();
 
-        io.to(roomCode).emit('phase-changed', { phase: 'betting', cutIndex: ci, gameState: sanitizeGameState(room.gameState) });
+        io.to(roomCode).emit('phase-changed', { phase: 'betting', gameState: sanitizeGameState(room.gameState) });
       } catch (e) { socket.emit('error', { message: e.message }); }
     });
 

@@ -3,6 +3,9 @@ const token = localStorage.getItem('token');
 const ME    = JSON.parse(localStorage.getItem('user') || 'null');
 if (!token || !ME) { location.href = '/'; }
 
+// ── Pile state ────────────────────────────────────────────────────────────────
+const pileState = { chooser: [], shuffler: [] };
+
 const roomCode = new URLSearchParams(location.search).get('room');
 if (!roomCode) { location.href = '/lobby'; }
 
@@ -16,7 +19,7 @@ socket.on('connect_error', () => { localStorage.clear(); location.href = '/'; })
 
 let roomState   = null;
 let timerInterval = null;
-let cutPending   = null;   // { cutIndex }
+let cutPending   = false;  // true when cut point is visually selected (server picks actual cut)
 let specTarget   = null;
 
 // ── Room join ─────────────────────────────────────────────────────────────────
@@ -26,7 +29,7 @@ socket.on('room-state',   applyRoomState);
 socket.on('game-started', applyRoomState);
 socket.on('room-updated', applyRoomState);
 
-socket.on('player-joined', ({ players }) => { if (roomState) { roomState.players = players; renderSeats(); renderPlayersList(); } addLog('A player joined', 'info'); });
+socket.on('player-joined', ({ players }) => { if (roomState) { roomState.players = players; renderSeats(); renderPlayersList(); } addLog('A player joined', 'info'); SFX.join(); });
 socket.on('player-left',   ({ username, players, gameState }) => {
   if (roomState) { roomState.players = players; if (gameState) roomState.gameState = gameState; renderSeats(); renderPlayersList(); applyPhase(); }
   addLog(username + ' left the room', 'info');
@@ -36,8 +39,19 @@ socket.on('phase-changed', ({ phase, timerEnd, chosenValue, cutIndex, gameState,
   if (roomState) { roomState.gameState = { ...roomState.gameState, ...gameState, phase }; }
   if (timerEnd)    roomState.gameState.timerEnd = timerEnd;
   if (chosenValue) roomState.gameState.chosenValue = chosenValue;
+
+  if (phase === 'choosing') {
+    // Show shuffle animation for 3 seconds, then switch to choosing UI
+    showShuffleAnimation(3000, () => {
+      applyPhase();
+      if (timerEnd) startTimer(new Date(timerEnd));
+    });
+    if (autoChosen) addLog(`Time's up! Auto-chosen: ${chosenValue}`, 'gold');
+    if (chooserName) addLog(`${chooserName} chose "${chosenValue}"`, 'gold');
+    return;
+  }
+
   applyPhase();
-  if (phase === 'choosing' && timerEnd) startTimer(timerEnd);
   if (phase === 'cutting' && autoChosen) addLog(`Time's up! Auto-chosen: ${chosenValue}`, 'gold');
   if (phase === 'cutting' && chooserName) addLog(`${chooserName} chose "${chosenValue}"`, 'gold');
   if (phase === 'betting') { stopTimer(); updateChosenDisplays(); showBetPanels(); }
@@ -50,6 +64,7 @@ socket.on('timer-tick', ({ secondsLeft }) => updateTimerDisplay(secondsLeft));
 socket.on('card-revealed', ({ card, rank, suit, recipient, cardIndex, recipientName, isWinCard }) => {
   addCardToTable(card, rank, suit, recipient, isWinCard);
   addLog(`Card ${cardIndex + 1}: ${card} → ${recipientName}`, isWinCard ? 'win' : '');
+  if (isWinCard) setTimeout(() => SFX.winCard(), 190); // play after flip
 });
 
 socket.on('bet-updated', ({ activePlayerBets, betsReady }) => {
@@ -229,7 +244,9 @@ function updateTimerDisplay(secs) {
   circle.style.strokeDashoffset = CIRC * (1 - frac);
   const m = Math.floor(secs / 60), s = secs % 60;
   text.textContent = `${m}:${s.toString().padStart(2,'0')}`;
-  ring.classList.toggle('urgent', secs <= 30);
+  const urgent = secs <= 30;
+  ring.classList.toggle('urgent', urgent);
+  if (urgent && secs > 0) SFX.tick();
 }
 
 // ── Cut UI ────────────────────────────────────────────────────────────────────
@@ -247,19 +264,20 @@ document.getElementById('cut-stack').addEventListener('mousemove', (e) => {
 });
 
 document.getElementById('cut-stack').addEventListener('click', (e) => {
-  const rect  = e.currentTarget.getBoundingClientRect();
+  const rect = e.currentTarget.getBoundingClientRect();
   cutY = e.clientY - rect.top;
-  const pct   = cutY / rect.height;
-  cutPending  = { cutIndex: Math.round(pct * 52) };
+  // Visual only — server generates the actual secure random cut point
+  cutPending = true;
   document.getElementById('cut-confirm-btn').style.display = 'inline-flex';
-  addLog(`Cut point set at ${Math.round(pct * 100)}%`, 'info');
+  addLog('Cut point selected — server will apply a secure random cut', 'info');
 });
 
 function confirmCut() {
   if (!cutPending) return;
-  socket.emit('cut-deck', { roomCode, cutIndex: cutPending.cutIndex });
+  // Only roomCode sent — server ignores any cutIndex and picks its own crypto-random point
+  socket.emit('cut-deck', { roomCode });
   hideCutUI();
-  addLog('Deck cut!', 'gold');
+  addLog('Deck cut! 🔀', 'gold');
 }
 
 // ── Bet panels ────────────────────────────────────────────────────────────────
@@ -298,6 +316,7 @@ function placeActiveBet() {
   const amt = parseInt(document.getElementById('active-bet-input').value);
   if (!amt || amt < 1) return addLog('Enter a valid bet amount', 'lose');
   socket.emit('place-active-bet', { roomCode, amount: amt });
+  SFX.coin();
   addLog('Bet placed: ' + amt + ' pts', 'info');
 }
 
@@ -306,6 +325,7 @@ function placeSpecBet() {
   const amt = parseInt(document.getElementById('spec-bet-input').value);
   if (!amt || amt < 1) return addLog('Enter a valid bet amount', 'lose');
   socket.emit('place-spectator-bet', { roomCode, targetUserId: specTarget, amount: amt });
+  SFX.coin();
   addLog('Spectator bet placed: ' + amt + ' pts', 'info');
 }
 
@@ -325,15 +345,27 @@ function updateChosenDisplays() {
 }
 
 // ── Running / card reveal ─────────────────────────────────────────────────────
+let dealtCount = 0;
+
 function showRunningPhase() {
   PHASES.forEach(p => { const el = document.getElementById('phase-' + p); if (el) el.style.display = 'none'; });
-  const el = document.getElementById('phase-running');
-  el.style.display = 'flex';
+  document.getElementById('phase-running').style.display = 'flex';
+
+  pileState.chooser  = [];
+  pileState.shuffler = [];
+  dealtCount = 0;
+
+  document.getElementById('chooser-cards').innerHTML  = '';
+  document.getElementById('shuffler-cards').innerHTML = '';
+
+  const cp = document.getElementById('center-pack');
+  if (cp) cp.classList.remove('depleted', 'empty');
+
   if (roomState) {
     const gs = roomState.gameState;
     const shuffler = roomState.players[gs.shufflerIndex];
     const chooser  = roomState.players[gs.chooserIndex];
-    document.getElementById('chooser-pile-label').textContent  = (chooser?.username || 'Chooser')  + ' (Chooser)';
+    document.getElementById('chooser-pile-label').textContent  = (chooser?.username  || 'Chooser')  + ' (Chooser)';
     document.getElementById('shuffler-pile-label').textContent = (shuffler?.username || 'Shuffler') + ' (Shuffler)';
     updateChosenDisplays();
   }
@@ -343,15 +375,175 @@ function resetRunning() {
   document.getElementById('chooser-cards').innerHTML  = '';
   document.getElementById('shuffler-cards').innerHTML = '';
   document.getElementById('phase-running').style.display = 'none';
-  specTarget = null; cutPending = null;
+  pileState.chooser  = [];
+  pileState.shuffler = [];
+  dealtCount = 0;
+  const flyEl = document.getElementById('deal-fly-card');
+  if (flyEl) flyEl.style.display = 'none';
+  specTarget = null; cutPending = false;
+}
+
+
+// ── Card HTML builder ─────────────────────────────────────────────────────────
+function buildCardHTML(rank, suit, isWin, noAnim = false) {
+  const isRed    = suit === '♥' || suit === '♦';
+  const colorCls = isRed ? 'red' : 'black';
+  const winCls   = isWin ? ' win-card' : '';
+  const animCls  = noAnim ? ' no-anim' : '';
+  let inner = '';
+
+  if (rank === 'A') {
+    inner = `
+      <div class="card-corner tl"><span class="corner-rank">A</span><span class="corner-suit">${suit}</span></div>
+      <div class="card-ace-center"><span class="ace-pip">${suit}</span></div>
+      <div class="card-corner br"><span class="corner-rank">A</span><span class="corner-suit">${suit}</span></div>`;
+  } else if (['J','Q','K'].includes(rank)) {
+    inner = `
+      <div class="card-corner tl"><span class="corner-rank">${rank}</span><span class="corner-suit">${suit}</span></div>
+      <div class="card-face-badge">
+        <span class="face-letter">${rank}</span>
+        <span class="face-suit-row">${suit} ${suit}</span>
+      </div>
+      <div class="card-corner br"><span class="corner-rank">${rank}</span><span class="corner-suit">${suit}</span></div>`;
+    return `<div class="playing-card ${colorCls} face-card${winCls}${animCls}">${inner}</div>`;
+  } else {
+    inner = `
+      <div class="card-corner tl"><span class="corner-rank">${rank}</span><span class="corner-suit">${suit}</span></div>
+      <div class="card-center-pip">${suit}</div>
+      <div class="card-corner br"><span class="corner-rank">${rank}</span><span class="corner-suit">${suit}</span></div>`;
+  }
+  return `<div class="playing-card ${colorCls}${winCls}${animCls}">${inner}</div>`;
+}
+
+function renderPile(pKey) {
+  const cards = pileState[pKey];
+  if (!cards.length) return '';
+  const top   = cards[cards.length - 1];
+  const count = cards.length;
+  // Top card always no-anim (animation handled by fly card)
+  const cardHTML = buildCardHTML(top.rank, top.suit, top.isWin, true);
+  return `<div class="card-pile">
+    ${count >= 3 ? '<div class="pile-ghost pile-ghost-2"></div>' : ''}
+    ${count >= 2 ? '<div class="pile-ghost pile-ghost-1"></div>' : ''}
+    <div class="pile-top-card">${cardHTML}</div>
+    ${count > 1 ? `<div class="pile-count-badge">×${count}</div>` : ''}
+  </div>`;
 }
 
 function addCardToTable(card, rank, suit, recipient, isWin) {
-  const isRed = suit === '♥' || suit === '♦';
-  const el = document.createElement('div');
-  el.className = 'playing-card ' + (isRed ? 'red' : 'black') + (isWin ? ' win-card' : '');
-  el.innerHTML = `<div class="card-rank">${rank}</div><div class="card-suit">${suit}</div>`;
-  document.getElementById(recipient === 'chooser' ? 'chooser-cards' : 'shuffler-cards').appendChild(el);
+  animateDeal(rank, suit, recipient, isWin, () => {
+    pileState[recipient].push({ card, rank, suit, isWin });
+    const pileEl = document.getElementById(recipient === 'chooser' ? 'chooser-cards' : 'shuffler-cards');
+    pileEl.innerHTML = renderPile(recipient);
+    // Update center deck visual depletion
+    dealtCount++;
+    const cp = document.getElementById('center-pack');
+    if (cp) {
+      if (dealtCount >= 40) cp.classList.add('empty');
+      else if (dealtCount >= 20) cp.classList.add('depleted');
+    }
+  });
+}
+
+// Deal card fly animation from center deck to target pile
+function animateDeal(rank, suit, recipient, isWin, onLand) {
+  const flyEl    = document.getElementById('deal-fly-card');
+  const deckEl   = document.getElementById('center-pack');
+  const targetEl = document.getElementById(recipient === 'chooser' ? 'chooser-cards' : 'shuffler-cards');
+
+  if (!flyEl || !deckEl || !targetEl) { onLand(); return; }
+
+  const deckRect   = deckEl.getBoundingClientRect();
+  const targetRect = targetEl.getBoundingClientRect();
+
+  const tx = targetRect.left + (targetRect.width  / 2) - 35;
+  const ty = targetRect.top  + (targetRect.height / 2) - 50;
+  const rot = recipient === 'chooser' ? -8 : 8;
+
+  flyEl.style.cssText = `
+    position:fixed; z-index:1000; width:70px; height:100px;
+    border-radius:8px; pointer-events:none; overflow:hidden;
+    left:${deckRect.left}px; top:${deckRect.top}px;
+    background:linear-gradient(145deg,#1e4db7 0%,#2e82ff 50%,#1a3a8c 100%);
+    border:1.5px solid rgba(255,255,255,0.25);
+    box-shadow:4px 6px 20px rgba(0,0,0,0.8);
+    display:block; transition:none; transform:rotate(0deg); opacity:1;`;
+  flyEl.innerHTML = '<div class="card-back-pattern"></div>';
+
+  SFX.cardWhoosh(); // 🔊 whoosh on departure
+
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      flyEl.style.transition =
+        'left 0.38s cubic-bezier(0.23,1,0.32,1),'
+      + 'top 0.38s cubic-bezier(0.23,1,0.32,1),'
+      + 'transform 0.38s ease';
+      flyEl.style.left      = tx + 'px';
+      flyEl.style.top       = ty + 'px';
+      flyEl.style.transform = `rotate(${rot}deg) scale(0.95)`;
+
+      setTimeout(() => {
+        SFX.cardFlip(); // 🔊 flip sound at midpoint
+        flyEl.style.background = '';
+        flyEl.style.border     = '';
+        flyEl.innerHTML = buildCardHTML(rank, suit, isWin, true);
+      }, 190);
+
+      setTimeout(() => {
+        SFX.cardLand(); // 🔊 thud on landing
+        flyEl.style.display = 'none';
+        onLand();
+      }, 420);
+    });
+  });
+}
+
+// ── Shuffle Animation ─────────────────────────────────────────────────────────
+function showShuffleAnimation(durationMs, onDone) {
+  const overlay  = document.getElementById('shuffle-anim');
+  const bar      = document.getElementById('shuffle-bar');
+  const hint     = document.getElementById('shuffle-hint');
+  const flyCard  = document.getElementById('fly-card');
+  overlay.classList.add('show');
+
+  SFX.shuffle(durationMs); // 🔊 card shuffle sounds
+  const hints = ['Randomizing order…', 'Mixing cards…', 'Almost ready…', 'Deck is ready!'];
+  let hintIdx = 0;
+
+  // Progress bar
+  const startTime = Date.now();
+  const barInterval = setInterval(() => {
+    const pct = Math.min(100, ((Date.now() - startTime) / durationMs) * 100);
+    bar.style.width = pct + '%';
+    if (pct >= 100) clearInterval(barInterval);
+  }, 80);
+
+  // Hint text cycle
+  const hintInterval = setInterval(() => {
+    hintIdx = (hintIdx + 1) % hints.length;
+    hint.textContent = hints[hintIdx];
+  }, durationMs / hints.length);
+
+  // Flying card animation loop
+  let flyCount = 0;
+  const maxFlies = Math.floor(durationMs / 400);
+  const flyInterval = setInterval(() => {
+    flyCard.classList.remove('flying');
+    void flyCard.offsetWidth; // reflow
+    flyCard.classList.add('flying');
+    flyCount++;
+    if (flyCount >= maxFlies) clearInterval(flyInterval);
+  }, 400);
+
+  setTimeout(() => {
+    clearInterval(barInterval);
+    clearInterval(hintInterval);
+    clearInterval(flyInterval);
+    overlay.classList.remove('show');
+    bar.style.width = '0%';
+    hint.textContent = 'Preparing your deck…';
+    if (onDone) onDone();
+  }, durationMs);
 }
 
 // ── Result overlay ────────────────────────────────────────────────────────────
@@ -365,6 +557,8 @@ function showResult(winner, loser, winnerCard, betAmt, isWinner, nextShuffler, n
   document.getElementById('result-next').textContent =
     `Next round → Shuffler: ${nextShuffler} | Chooser: ${nextChooser}`;
   document.getElementById('result-overlay').classList.add('show');
+  // Sound
+  setTimeout(() => isWinner ? SFX.win() : SFX.lose(), 100);
 
   let secs = 5;
   const cdEl = document.getElementById('result-countdown');
@@ -378,10 +572,15 @@ function showResult(winner, loser, winnerCard, betAmt, isWinner, nextShuffler, n
 }
 
 // ── Actions ───────────────────────────────────────────────────────────────────
-function startGame()  { socket.emit('start-game',  { roomCode }); }
-function shuffleDeck(){ socket.emit('shuffle-deck', { roomCode }); addLog('Deck shuffled!', 'gold'); }
-function runGame()    { socket.emit('run-game',     { roomCode }); }
+function startGame()  { SFX.click(); socket.emit('start-game',  { roomCode }); SFX.gameStart(); }
+function shuffleDeck(){ SFX.click(); socket.emit('shuffle-deck', { roomCode }); addLog('Deck shuffled!', 'gold'); }
+function runGame()    { SFX.click(); socket.emit('run-game',     { roomCode }); }
 function leaveRoom()  { socket.emit('leave-room',   { roomCode }); location.href = '/lobby'; }
+
+function toggleMute() {
+  const muted = SFX.toggleMute();
+  document.getElementById('mute-btn').textContent = muted ? '🔇' : '🔊';
+}
 
 // ── Log ───────────────────────────────────────────────────────────────────────
 function addLog(msg, type = '') {

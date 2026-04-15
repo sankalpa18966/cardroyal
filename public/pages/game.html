@@ -20,6 +20,7 @@
       <span style="font-size:0.85rem;color:var(--text2);" id="phase-label">Waiting</span>
       <span class="nav-points" id="nav-points">🏆 — pts</span>
       <span class="nav-user"   id="nav-user"></span>
+      <button class="btn btn-ghost btn-sm" id="mute-btn" onclick="toggleMute()" title="Toggle sound">🔊</button>
       <button class="btn btn-ghost btn-sm" onclick="leaveRoom()">Leave</button>
     </div>
   </nav>
@@ -111,20 +112,33 @@
         </div>
 
         <!-- Phase: running / result (cards show here) -->
-        <div id="phase-running" style="display:none;width:100%;height:100%;display:none;flex-direction:column;align-items:center;justify-content:center;gap:16px;">
-          <div class="chosen-display">
+        <div id="phase-running" style="display:none;width:100%;height:100%;flex-direction:column;align-items:center;justify-content:center;gap:10px;">
+          <div class="chosen-display" style="margin:0 0 4px;">
             <span class="chosen-label">Looking for:</span>
             <span class="chosen-value" id="chosen-val-run">—</span>
           </div>
-          <div class="deal-row">
-            <div class="deal-pile">
-              <div class="deal-pile-label" id="chooser-pile-label">Chooser</div>
-              <div class="deal-cards" id="chooser-cards"></div>
+          <div class="running-table">
+            <!-- Chooser pile left -->
+            <div class="running-pile-area">
+              <div class="running-pile-label" id="chooser-pile-label">Chooser</div>
+              <div class="pile-zone" id="chooser-cards"></div>
             </div>
-            <div style="font-size:2rem;align-self:center;color:var(--text3);">⚔️</div>
-            <div class="deal-pile">
-              <div class="deal-pile-label" id="shuffler-pile-label">Shuffler</div>
-              <div class="deal-cards" id="shuffler-cards"></div>
+            <!-- Center deck -->
+            <div class="center-deck-area">
+              <div class="center-deck-stack" id="center-pack">
+                <div class="cp-ghost" style="--ci:5;"></div>
+                <div class="cp-ghost" style="--ci:4;"></div>
+                <div class="cp-ghost" style="--ci:3;"></div>
+                <div class="cp-ghost" style="--ci:2;"></div>
+                <div class="cp-ghost" style="--ci:1;"></div>
+                <div class="cp-card-top"></div>
+              </div>
+              <div class="center-deck-label">📦 Deck</div>
+            </div>
+            <!-- Shuffler pile right -->
+            <div class="running-pile-area">
+              <div class="running-pile-label" id="shuffler-pile-label">Shuffler</div>
+              <div class="pile-zone" id="shuffler-cards"></div>
             </div>
           </div>
         </div>
@@ -132,6 +146,7 @@
       </div><!-- /stage -->
     </div><!-- /felt-table -->
   </main>
+
 
   <!-- SIDEBAR -->
   <aside class="game-sidebar">
@@ -172,7 +187,47 @@
   </div>
 </div>
 
+<!-- Fixed flying card for deal animation -->
+<div id="deal-fly-card" style="
+  position:fixed;z-index:1000;width:70px;height:100px;
+  display:none;pointer-events:none;border-radius:8px;
+  background:linear-gradient(145deg,#1e4db7 0%,#2878f0 50%,#1a3a8c 100%);
+  border:1.5px solid rgba(255,255,255,0.25);
+  box-shadow:4px 6px 20px rgba(0,0,0,0.8);
+  overflow:hidden;
+"></div>
+
+<!-- Shuffle Animation Overlay -->
+<div class="shuffle-anim-overlay" id="shuffle-anim">
+  <div class="shuffle-label">🔀 Shuffling the Deck…</div>
+  <div class="shuffle-stage">
+    <div class="shuffle-half left-half" id="shuffle-left">
+      <div class="s-card" style="--d:0;"></div>
+      <div class="s-card" style="--d:1;"></div>
+      <div class="s-card" style="--d:2;"></div>
+      <div class="s-card" style="--d:3;"></div>
+      <div class="s-card" style="--d:4;"></div>
+    </div>
+    <div class="shuffle-mid">
+      <div class="shuffle-card-fly" id="fly-card"></div>
+    </div>
+    <div class="shuffle-half right-half" id="shuffle-right">
+      <div class="s-card" style="--d:0;"></div>
+      <div class="s-card" style="--d:1;"></div>
+      <div class="s-card" style="--d:2;"></div>
+      <div class="s-card" style="--d:3;"></div>
+      <div class="s-card" style="--d:4;"></div>
+    </div>
+  </div>
+  <div class="shuffle-bar-wrap">
+    <div class="shuffle-bar" id="shuffle-bar"></div>
+  </div>
+  <div class="shuffle-hint" id="shuffle-hint">Preparing your deck…</div>
+</div>
+
 <script src="/socket.io/socket.io.js"></script>
+<script src="/js/sound.js"></script>
 <script src="/js/game.js"></script>
+
 </body>
 </html>

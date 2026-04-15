@@ -1,0 +1,27 @@
+version: '3.9'
+
+services:
+  cardroyal:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cardroyal-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+    # Health check visible in `docker ps`
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
