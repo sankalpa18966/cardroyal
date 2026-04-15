@@ -28,6 +28,7 @@ app.get('/',          (_, res) => res.sendFile(path.join(__dirname, '../public/p
 app.get('/register',  (_, res) => res.sendFile(path.join(__dirname, '../public/pages/register.html')));
 app.get('/lobby',     (_, res) => res.sendFile(path.join(__dirname, '../public/pages/lobby.html')));
 app.get('/game',      (_, res) => res.sendFile(path.join(__dirname, '../public/pages/game.html')));
+app.get('/profile',   (_, res) => res.sendFile(path.join(__dirname, '../public/pages/profile.html')));
 app.get('/admin',     (_, res) => res.sendFile(path.join(__dirname, '../public/pages/admin.html')));
 app.get('/manager',   (_, res) => res.sendFile(path.join(__dirname, '../public/pages/manager.html')));
 

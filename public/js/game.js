@@ -73,18 +73,34 @@ socket.on('bet-updated', ({ activePlayerBets, betsReady }) => {
   updateBetStatus(activePlayerBets, betsReady);
 });
 
-socket.on('spectator-bet-placed', ({ bettorName, targetUserId, amount }) => {
-  addLog(`${bettorName} bet ${amount} pts`, 'info');
+socket.on('spectator-bet-updated', (bets) => {
+  if (roomState && roomState.gameState) {
+    roomState.gameState.roundBets = bets;
+  }
   renderSpecBetsList();
 });
 
-socket.on('game-result', ({ winner, loser, winnerCard, betAmount, specResults, nextShuffler, nextChooser }) => {
-  const isWinner = winner.userId === ME.id || winner.userId === ME._id;
-  showResult(winner.username, loser.username, winnerCard, betAmount, isWinner, nextShuffler, nextChooser, specResults);
-  // Update local points
-  if (isWinner) { ME.points += betAmount; } else { ME.points -= betAmount; }
-  localStorage.setItem('user', JSON.stringify(ME));
-  document.getElementById('nav-points').textContent = '🏆 ' + ME.points + ' pts';
+socket.on('game-result', ({ winner, loser, winnerCard, betAmount, specResults, pointDeltas, players, nextShuffler, nextChooser }) => {
+  const myId = ME.id || ME._id;
+  const isWinner = winner.userId === myId;
+  const myPointDelta = pointDeltas[myId] || 0;
+
+  showResult(winner.username, loser.username, winnerCard, betAmount, isWinner, nextShuffler, nextChooser, specResults, myPointDelta);
+  
+  // Sync exact point changes
+  if (players) {
+    if (roomState) roomState.players = players;
+    renderPlayersList();
+    renderSeats();
+    
+    // Update local ME
+    const mePlayer = players.find(p => p.userId === myId);
+    if (mePlayer) {
+      ME.points = mePlayer.points;
+      localStorage.setItem('user', JSON.stringify(ME));
+      document.getElementById('nav-points').textContent = '🏆 ' + ME.points + ' pts';
+    }
+  }
 });
 
 socket.on('kicked', () => { alert('You have been removed from the room.'); location.href = '/lobby'; });
@@ -197,8 +213,56 @@ function renderSpecBetsList() {
   if (!roomState) return;
   const bets = roomState.gameState.roundBets || [];
   const el   = document.getElementById('spec-bets-list');
-  el.innerHTML = bets.length === 0 ? 'None yet' :
-    bets.map(b => `<div style="margin-bottom:4px;">${b.bettorName}: ${b.amount} pts</div>`).join('');
+  const myId = ME.id || ME._id;
+  
+  if (bets.length === 0) {
+    el.innerHTML = 'None yet';
+    return;
+  }
+
+  // Find target names easily
+  const shuffler = roomState.players[roomState.gameState.shufflerIndex];
+  const chooser = roomState.players[roomState.gameState.chooserIndex];
+
+  const getTargetName = (tid) => {
+    if (shuffler && tid === shuffler.userId) return shuffler.username;
+    if (chooser && tid === chooser.userId) return chooser.username;
+    return 'Unknown';
+  };
+
+  el.innerHTML = bets.map(b => {
+    const isMine = b.creatorId === myId;
+    const targetName = getTargetName(b.targetUserId);
+    
+    if (b.status === 'matched') {
+      return `
+        <div style="margin-bottom:6px; padding:6px; background:var(--bg3); border-radius:4px; border-left:3px solid var(--gold);">
+          <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+            <span style="color:var(--text);"><strong>${b.amount}</strong> pts</span>
+            <span style="color:var(--text2); font-size:0.75rem;">Matched 🤝</span>
+          </div>
+          <div><span style="color:var(--blue);">${b.creatorName}</span> (on ${targetName})</div>
+          <div><span style="color:var(--lose);">${b.matcherName}</span> (against)</div>
+        </div>
+      `;
+    } else {
+      // Open bet
+      // We can only match if we're not active players AND not the creator
+      const isShuffler = shuffler && shuffler.userId === myId;
+      const isChooser = chooser && chooser.userId === myId;
+      const canMatch = !isMine && !isShuffler && !isChooser && roomState.gameState.phase === 'betting';
+
+      return `
+        <div style="margin-bottom:6px; padding:6px; background:var(--bg2); border-radius:4px; border:1px dashed var(--border);">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+             <span><strong style="color:var(--gold);">${b.amount} pts</strong> by ${b.creatorName}</span>
+             ${canMatch ? `<button class="btn btn-sm btn-ghost" style="padding:2px 6px;font-size:0.7rem;color:var(--blue);" onclick="matchSpecBet('${b.id}')">Match</button>` : `<span style="font-size:0.7rem;color:var(--text3);">Open</span>`}
+          </div>
+          <div style="font-size:0.75rem; color:var(--text2); margin-top:4px;">Predicts: ${targetName} will win</div>
+        </div>
+      `;
+    }
+  }).join('');
 }
 
 // ── Value Grid ────────────────────────────────────────────────────────────────
@@ -326,7 +390,13 @@ function placeSpecBet() {
   if (!amt || amt < 1) return addLog('Enter a valid bet amount', 'lose');
   socket.emit('place-spectator-bet', { roomCode, targetUserId: specTarget, amount: amt });
   SFX.coin();
-  addLog('Spectator bet placed: ' + amt + ' pts', 'info');
+  addLog('Open bet created for ' + amt + ' pts', 'info');
+  document.getElementById('spec-bet-input').value = '';
+}
+
+function matchSpecBet(betId) {
+  socket.emit('match-spectator-bet', { roomCode, betId });
+  addLog('Attempting to match bet...', 'info');
 }
 
 function updateBetStatus(bets, ready) {
@@ -547,18 +617,19 @@ function showShuffleAnimation(durationMs, onDone) {
 }
 
 // ── Result overlay ────────────────────────────────────────────────────────────
-function showResult(winner, loser, winnerCard, betAmt, isWinner, nextShuffler, nextChooser, specResults) {
-  document.getElementById('result-emoji').textContent = isWinner ? '🏆' : '😢';
+function showResult(winner, loser, winnerCard, betAmt, isWinner, nextShuffler, nextChooser, specResults, myPointDelta) {
+  document.getElementById('result-emoji').textContent = myPointDelta >= 0 ? '🏆' : '😢';
   const title = document.getElementById('result-title');
   title.textContent = isWinner ? 'You Won!' : winner + ' Wins!';
   title.className = 'result-title ' + (isWinner ? 'win' : 'lose');
   document.getElementById('result-detail').textContent =
-    `Winning card: ${winnerCard} | Bet: ${betAmt} points`;
+    `Winning card: ${winnerCard} | ${winner} won ${betAmt} points`;
   document.getElementById('result-next').textContent =
     `Next round → Shuffler: ${nextShuffler} | Chooser: ${nextChooser}`;
   document.getElementById('result-overlay').classList.add('show');
+  
   // Sound
-  setTimeout(() => isWinner ? SFX.win() : SFX.lose(), 100);
+  setTimeout(() => myPointDelta >= 0 ? SFX.win() : SFX.lose(), 100);
 
   let secs = 5;
   const cdEl = document.getElementById('result-countdown');
@@ -568,7 +639,13 @@ function showResult(winner, loser, winnerCard, betAmt, isWinner, nextShuffler, n
     if (secs <= 0) clearInterval(cd);
   }, 1000);
 
-  addLog(isWinner ? `🏆 You won ${betAmt} pts!` : `😢 ${winner} wins. You lost ${betAmt} pts.`, isWinner ? 'win' : 'lose');
+  if (myPointDelta > 0) {
+    addLog(`🏆 You gained ${myPointDelta} pts!`, 'win');
+  } else if (myPointDelta < 0) {
+    addLog(`😢 You lost ${Math.abs(myPointDelta)} pts.`, 'lose');
+  } else {
+    addLog(`Round ended. No point changes for you.`, 'info');
+  }
 }
 
 // ── Actions ───────────────────────────────────────────────────────────────────

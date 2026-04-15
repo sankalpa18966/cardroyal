@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const { randomInt } = require('crypto');
+const { randomInt, randomUUID } = require('crypto');
 const Room = require('../models/Room');
 const User = require('../models/User');
 
@@ -78,13 +78,20 @@ const nextTurn = (players, shufflerIdx, chooserIdx, chooserWon) => {
   let newShufflerIdx, newChooserIdx;
 
   if (chooserWon) {
+    // Chooser becomes the new Shuffler. Next person is the new Chooser.
     newShufflerIdx = chooserIdx;
+    newChooserIdx = (newShufflerIdx + 1) % n;
   } else {
+    // Shuffler remains the same. 
+    // Chooser role moves to the NEXT person clockwise from the old chooser.
     newShufflerIdx = shufflerIdx;
+    newChooserIdx = (chooserIdx + 1) % n;
   }
-  // new chooser = next clockwise from new shuffler, skip the shuffler
-  newChooserIdx = (newShufflerIdx + 1) % n;
-  if (newChooserIdx === newShufflerIdx) newChooserIdx = (newChooserIdx + 1) % n;
+  
+  // Skip the shuffler if overlapping
+  if (newChooserIdx === newShufflerIdx) {
+    newChooserIdx = (newChooserIdx + 1) % n;
+  }
 
   return { newShufflerIdx, newChooserIdx };
 };
@@ -304,7 +311,7 @@ const setupGameHandler = (io) => {
       } catch (e) { socket.emit('error', { message: e.message }); }
     });
 
-    // ── Place Spectator Bet ───────────────────────────────────────────────────
+    // ── Place Spectator Bet (Open a new bet) ──────────────────────────────────
     socket.on('place-spectator-bet', async ({ roomCode, targetUserId, amount }) => {
       try {
         const room = await Room.findOne({ roomCode });
@@ -322,12 +329,54 @@ const setupGameHandler = (io) => {
         const user = await User.findById(uid);
         if (user.points < amt) return socket.emit('error', { message: 'Not enough points' });
 
-        // Replace any existing bet from this bettor
-        room.gameState.roundBets = room.gameState.roundBets.filter(b => b.bettorId.toString() !== uid);
-        room.gameState.roundBets.push({ bettorId: uid, bettorName: socket.user.username, targetUserId, amount: amt });
+        // Add to roundBets as an OPEN bet
+        const newBet = {
+          id: randomUUID(),
+          creatorId: uid,
+          creatorName: socket.user.username,
+          targetUserId: targetUserId,
+          amount: amt,
+          matcherId: null,
+          matcherName: null,
+          status: 'open'
+        };
+        room.gameState.roundBets.push(newBet);
         await room.save();
 
-        io.to(roomCode).emit('spectator-bet-placed', { bettorName: socket.user.username, targetUserId, amount: amt });
+        io.to(roomCode).emit('spectator-bet-updated', room.gameState.roundBets);
+      } catch (e) { socket.emit('error', { message: e.message }); }
+    });
+
+    // ── Match Spectator Bet ───────────────────────────────────────────────────
+    socket.on('match-spectator-bet', async ({ roomCode, betId }) => {
+      try {
+        const room = await Room.findOne({ roomCode });
+        if (!room || room.gameState.phase !== 'betting') return;
+
+        const shuffler = room.players[room.gameState.shufflerIndex];
+        const chooser = room.players[room.gameState.chooserIndex];
+        if (shuffler.userId.toString() === uid || chooser.userId.toString() === uid)
+          return socket.emit('error', { message: 'Active players cannot match spectator bets' });
+
+        const betIndex = room.gameState.roundBets.findIndex(b => b.id === betId);
+        if (betIndex === -1) return socket.emit('error', { message: 'Bet not found' });
+        const bet = room.gameState.roundBets[betIndex];
+
+        if (bet.status !== 'open') return socket.emit('error', { message: 'Bet is already matched or invalid' });
+        if (bet.creatorId.toString() === uid) return socket.emit('error', { message: 'Cannot match your own bet' });
+
+        const user = await User.findById(uid);
+        if (user.points < bet.amount) return socket.emit('error', { message: 'Not enough points to match this bet' });
+
+        bet.matcherId = uid;
+        bet.matcherName = socket.user.username;
+        bet.status = 'matched';
+        
+        // Save the updated bet
+        room.gameState.roundBets[betIndex] = bet;
+        await room.save();
+
+        io.to(roomCode).emit('spectator-bet-updated', room.gameState.roundBets);
       } catch (e) { socket.emit('error', { message: e.message }); }
     });
 
@@ -343,6 +392,13 @@ const setupGameHandler = (io) => {
         const { shufflerBet, chooserBet } = room.gameState.activePlayerBets;
         if (!shufflerBet || !chooserBet) return socket.emit('error', { message: 'Both players must bet first' });
         if (shufflerBet !== chooserBet)  return socket.emit('error', { message: 'Bets must be equal' });
+
+        // Purge unmatched spectator bets
+        const originalBetCount = room.gameState.roundBets.length;
+        room.gameState.roundBets = room.gameState.roundBets.filter(b => b.status === 'matched');
+        if (originalBetCount !== room.gameState.roundBets.length) {
+          io.to(roomCode).emit('spectator-bet-updated', room.gameState.roundBets);
+        }
 
         room.gameState.phase = 'running';
         await room.save();
@@ -378,8 +434,19 @@ const setupGameHandler = (io) => {
           if (idx !== -1) {
             room.players[idx].isConnected = false;
             room.players[idx].socketId = '';
-            await room.save();
-            io.to(room.roomCode).emit('player-left', { username: socket.user.username, players: room.players });
+            
+            // Auto-close if EVERYONE is disconnected
+            const anyConnected = room.players.some(p => p.isConnected);
+            if (!anyConnected) {
+              room.status = 'finished';
+              clearTimer(room.roomCode);
+              await room.save();
+              io.emit('lobby-update', { type: 'removed', roomCode: room.roomCode });
+            } else {
+              await room.save();
+              io.to(room.roomCode).emit('player-left', { username: socket.user.username, players: room.players });
+              io.emit('lobby-update', { type: 'updated', room: lobbyRoom(room) });
+            }
           }
         }
       } catch (e) { console.error('Disconnect err:', e.message); }
@@ -438,27 +505,45 @@ const revealCards = async (io, roomCode) => {
 // ─── Process Round Result ─────────────────────────────────────────────────────
 const processResult = async (io, roomCode, winner, loser) => {
   const room = await Room.findOne({ roomCode });
-  const betAmt = room.gameState.activePlayerBets.shufflerBet;
+  const betAmt = room.gameState.activePlayerBets.shufflerBet || 0;
 
-  // Update DB points
-  await User.findByIdAndUpdate(winner.userId, { $inc: { points:  betAmt } });
-  await User.findByIdAndUpdate(loser.userId,  { $inc: { points: -betAmt } });
-
-  // Update in-room points
-  const wi = room.players.findIndex(p => p.userId.toString() === winner.userId.toString());
-  const li = room.players.findIndex(p => p.userId.toString() === loser.userId.toString());
-  if (wi !== -1) room.players[wi].points += betAmt;
-  if (li !== -1) room.players[li].points -= betAmt;
+  // Track point deltas per user -> { userId: pointChange }
+  const pointDeltas = {};
+  
+  // Assign active players points
+  pointDeltas[winner.userId] = betAmt;
+  pointDeltas[loser.userId] = -betAmt;
 
   // Spectator bets
   const specResults = [];
   for (const bet of room.gameState.roundBets) {
-    const won = bet.targetUserId.toString() === winner.userId.toString();
-    const delta = won ? bet.amount : -bet.amount;
-    await User.findByIdAndUpdate(bet.bettorId, { $inc: { points: delta } });
-    const si = room.players.findIndex(p => p.userId.toString() === bet.bettorId.toString());
-    if (si !== -1) room.players[si].points += delta;
-    specResults.push({ bettorName: bet.bettorName, won, amount: bet.amount });
+    if (bet.status !== 'matched') continue;
+
+    const creatorWon = bet.targetUserId.toString() === winner.userId.toString();
+    const creatorDelta = creatorWon ? bet.amount : -bet.amount;
+    const matcherDelta = creatorWon ? -bet.amount : bet.amount;
+
+    pointDeltas[bet.creatorId] = (pointDeltas[bet.creatorId] || 0) + creatorDelta;
+    pointDeltas[bet.matcherId] = (pointDeltas[bet.matcherId] || 0) + matcherDelta;
+
+    specResults.push({ 
+      creatorName: bet.creatorName, 
+      matcherName: bet.matcherName,
+      creatorWon, 
+      amount: bet.amount 
+    });
+  }
+
+  // Update DB and Room Points
+  for (const userId of Object.keys(pointDeltas)) {
+    const delta = pointDeltas[userId];
+    if (delta !== 0) {
+      await User.findByIdAndUpdate(userId, { $inc: { points: delta } });
+      const pIndex = room.players.findIndex(p => p.userId.toString() === userId.toString());
+      if (pIndex !== -1) {
+        room.players[pIndex].points += delta;
+      }
+    }
   }
 
   // Turn rotation
@@ -471,6 +556,8 @@ const processResult = async (io, roomCode, winner, loser) => {
     winnerCard: room.gameState.winnerCard,
     betAmount: betAmt,
     specResults,
+    pointDeltas, // Client uses this to update real-time
+    players: room.players, // Sync whole room points
     nextShuffler: room.players[newShufflerIdx]?.username,
     nextChooser:  room.players[newChooserIdx]?.username
   });
@@ -508,8 +595,9 @@ const handleLeave = async (io, socket, roomCode) => {
   room.players.splice(idx, 1);
   socket.leave(roomCode);
 
-  if (room.players.length === 0) {
+  if (room.players.length === 0 || !room.players.some(p => p.isConnected)) {
     room.status = 'finished';
+    clearTimer(roomCode);
     await room.save();
     io.emit('lobby-update', { type: 'removed', roomCode });
     return;

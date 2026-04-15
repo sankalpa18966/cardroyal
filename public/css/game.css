@@ -361,6 +361,38 @@
   .running-table { gap: 16px; }
 }
 
+@media (max-width: 600px) {
+  .game-layout { grid-template-rows: 56px 1fr auto; }
+  .table-area { padding: 12px; margin-top: 15px; } /* Leave space for top seat */
+  
+  .felt-table { 
+    aspect-ratio: auto; 
+    height: 100%; 
+    border-radius: 80px; 
+    border-width: 3px; 
+  }
+  .seats-container { inset: -30px; }
+  .seat { width: 60px; }
+  .seat-avatar { width: 42px; height: 42px; font-size: 1rem; margin-bottom: 2px; }
+  
+  .phase-banner { padding: 16px; width: 90%; }
+  .phase-banner h2 { font-size: 1.25rem; }
+  
+  .value-grid { gap: 4px; }
+  .value-btn { font-size: 0.8rem; border-radius: 6px; }
+  
+  /* Scale down the entire running cards stage */
+  .running-table { transform: scale(0.85); transform-origin: center; gap: 8px; }
+  .chosen-value { font-size: 1.4rem; }
+  
+  .running-pile-area { min-width: 70px; }
+  .pile-zone { min-width: 70px; min-height: 90px; }
+  
+  /* Log / Sidebar adjustments */
+  .game-sidebar { max-height: 160px; }
+  .log-entry { font-size: 0.75rem; padding: 4px 6px; }
+}
+
 /* ── Shuffle Animation Overlay ────────────────────────────────────── */
 .shuffle-anim-overlay {
   position: fixed; inset: 0; z-index: 250;

@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CardRoyal – Profile</title>
+  <link rel="stylesheet" href="/css/main.css">
+  <style>
+    .profile-header { padding: 28px 32px 0; }
+    .profile-body   { padding: 24px 32px; max-width: 800px; margin: 0 auto; }
+    
+    .tabs-nav {
+      display: flex; gap: 8px; border-bottom: 1px solid var(--border); margin-bottom: 24px;
+    }
+    .tab-btn {
+      background: transparent; color: var(--text2); border: none; padding: 12px 24px;
+      font-size: 1rem; font-family: inherit; font-weight: 600; cursor: pointer;
+      border-bottom: 2px solid transparent; transition: all 0.2s;
+    }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active { color: var(--gold); border-bottom-color: var(--gold); }
+    
+    .tab-content { display: none; background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 32px; }
+    .tab-content.active { display: block; animation: fadeIn 0.3s ease; }
+    
+    .info-grid { display: grid; grid-template-columns: 100px 1fr; gap: 16px 24px; font-size: 1.1rem; }
+    .info-label { color: var(--text3); font-weight: 600; text-transform: uppercase; font-size: 0.85rem; padding-top: 4px; }
+    .info-val { color: var(--text); font-weight: 700; }
+    
+    .coming-soon { text-align: center; color: var(--text3); padding: 40px 20px; font-style: italic; }
+    .points-pill { background: rgba(245,200,66,0.12); color: var(--gold); border-radius: 99px; padding: 4px 14px; font-size: 0.88rem; font-weight: 700; }
+
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+  </style>
+</head>
+<body>
+  <div class="bg-glow"></div>
+
+  <nav class="nav">
+    <a href="/lobby" class="nav-brand" style="text-decoration:none;">🃏 CardRoyal</a>
+    <div class="nav-right">
+      <span class="points-pill" id="nav-points">🏆 — pts</span>
+      <span class="nav-user" id="nav-user"></span>
+      <button class="btn btn-ghost btn-sm" onclick="logout()">Logout</button>
+    </div>
+  </nav>
+
+  <div class="page-content">
+    <div class="profile-header" style="max-width: 800px; margin: 0 auto;">
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <div>
+          <h2 style="font-size:1.6rem;font-weight:800;">My Profile</h2>
+          <p style="color:var(--text2);font-size:0.9rem;margin-top:4px;">Manage your account and balance</p>
+        </div>
+        <a href="/lobby" class="btn btn-ghost">← Back to Lobby</a>
+      </div>
+    </div>
+
+    <div class="profile-body">
+      
+      <!-- Tabs -->
+      <div class="tabs-nav">
+        <button class="tab-btn active" onclick="switchTab('info')">Information</button>
+        <button class="tab-btn" onclick="switchTab('deposit')">Deposit</button>
+        <button class="tab-btn" onclick="switchTab('withdraw')">Withdraw</button>
+      </div>
+
+      <!-- Information Tab -->
+      <div id="tab-info" class="tab-content active">
+        <h3 style="margin-bottom: 24px; color: var(--gold);">Account Details</h3>
+        <div class="info-grid">
+          <div class="info-label">Username</div>
+          <div class="info-val" id="profile-username">—</div>
+          
+          <div class="info-label">Balance</div>
+          <div class="info-val" style="color: var(--gold);" id="profile-points">— pts</div>
+          
+          <div class="info-label">Role</div>
+          <div class="info-val" id="profile-role" style="text-transform: capitalize;">—</div>
+        </div>
+      </div>
+
+      <!-- Deposit Tab -->
+      <div id="tab-deposit" class="tab-content">
+        <h3 style="margin-bottom: 16px; color: var(--blue);">Deposit Funds</h3>
+        <p style="color: var(--text2); margin-bottom: 24px;">Add points to your CardRoyal account.</p>
+        
+        <div class="coming-soon">
+          Banking integration coming soon...
+        </div>
+      </div>
+
+      <!-- Withdraw Tab -->
+      <div id="tab-withdraw" class="tab-content">
+        <h3 style="margin-bottom: 16px; color: var(--red);">Withdraw Funds</h3>
+        <p style="color: var(--text2); margin-bottom: 24px;">Withdraw your winnings to your bank account.</p>
+        
+        <div class="coming-soon">
+          Withdrawal gateways coming soon...
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+    // Tab switching logic
+    function switchTab(tabId) {
+      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+      
+      event.target.classList.add('active');
+      document.getElementById('tab-' + tabId).classList.add('active');
+    }
+
+    // Load User info
+    const token = localStorage.getItem('token');
+    const userJson = localStorage.getItem('user');
+
+    if (!token || !userJson) {
+      window.location.href = '/';
+    } else {
+      const user = JSON.parse(userJson);
+      
+      // Setup Nav
+      document.getElementById('nav-user').textContent = user.username;
+      document.getElementById('nav-points').textContent = '🏆 ' + user.points + ' pts';
+      
+      // Setup Profile Page
+      document.getElementById('profile-username').textContent = user.username;
+      document.getElementById('profile-points').textContent = user.points + ' pts';
+      document.getElementById('profile-role').textContent = user.role || 'Player';
+    }
+
+    function logout() {
+      localStorage.clear();
+      window.location.href = '/';
+    }
+  </script>
+</body>
+</html>
