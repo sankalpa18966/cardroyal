@@ -10,10 +10,14 @@ const playerSlotSchema = new mongoose.Schema({
 }, { _id: false });
 
 const betSchema = new mongoose.Schema({
-  bettorId:     { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-  bettorName:   String,
+  id:           String,
+  creatorId:    { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  creatorName:  String,
+  matcherId:    { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  matcherName:  { type: String, default: null },
   targetUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-  amount:       Number
+  amount:       Number,
+  status:       { type: String, enum: ['open', 'matched'], default: 'open' }
 }, { _id: false });
 
 const revealedCardSchema = new mongoose.Schema({

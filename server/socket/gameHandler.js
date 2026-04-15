@@ -37,6 +37,42 @@ const clearTimer = (roomCode) => {
   if (roomTimers[roomCode]) { clearInterval(roomTimers[roomCode]); delete roomTimers[roomCode]; }
 };
 
+const handleTimeout = async (io, roomCode, phase) => {
+  const room = await Room.findOne({ roomCode });
+  if (!room || room.gameState.phase !== phase) return;
+  const n = room.players.length;
+  if (n < 2) return;
+
+  if (phase === 'shuffling') {
+    let ns = (room.gameState.shufflerIndex + 1) % n;
+    if (ns === room.gameState.chooserIndex) ns = (ns + 1) % n;
+    room.gameState.shufflerIndex = ns;
+  } else if (phase === 'choosing') {
+    let nc = (room.gameState.chooserIndex + 1) % n;
+    if (nc === room.gameState.shufflerIndex) nc = (nc + 1) % n;
+    room.gameState.chooserIndex = nc;
+  }
+  
+  room.gameState.timerEnd = new Date(Date.now() + 60_000);
+  await room.save();
+  
+  io.to(roomCode).emit('phase-changed', { phase, timerEnd: room.gameState.timerEnd, gameState: sanitizeGameState(room.gameState) });
+  startPhaseTimer(io, roomCode, phase, 60);
+};
+
+const startPhaseTimer = (io, roomCode, phase, seconds) => {
+  clearTimer(roomCode);
+  let secs = seconds;
+  roomTimers[roomCode] = setInterval(() => {
+    secs--;
+    io.to(roomCode).emit('timer-tick', { secondsLeft: secs });
+    if (secs <= 0) {
+      clearTimer(roomCode);
+      handleTimeout(io, roomCode, phase);
+    }
+  }, 1000);
+};
+
 // ─── Sanitizers ───────────────────────────────────────────────────────────────
 const sanitizeGameState = (gs) => ({
   shufflerIndex:    gs.shufflerIndex,
@@ -207,10 +243,14 @@ const setupGameHandler = (io) => {
         room.gameState.phase = 'shuffling';
         room.gameState.shufflerIndex = 0;
         room.gameState.chooserIndex = 1;
+        room.gameState.timerEnd = new Date(Date.now() + 60_000);
         await room.save();
 
         io.to(roomCode).emit('game-started', sanitizeRoom(room));
+        io.to(roomCode).emit('phase-changed', { phase: 'shuffling', timerEnd: room.gameState.timerEnd, gameState: sanitizeGameState(room.gameState) });
         io.emit('lobby-update', { type: 'updated', room: lobbyRoom(room) });
+        
+        startPhaseTimer(io, roomCode, 'shuffling', 60);
       } catch (e) { socket.emit('error', { message: e.message }); }
     });
 
@@ -225,7 +265,7 @@ const setupGameHandler = (io) => {
 
         room.gameState.deck = shuffleDeck(createDeck());
         room.gameState.phase = 'choosing';
-        room.gameState.timerEnd = new Date(Date.now() + 120_000);
+        room.gameState.timerEnd = new Date(Date.now() + 60_000);
         room.gameState.revealedCards = [];
         room.gameState.winner = null; room.gameState.winnerCard = null;
         room.gameState.roundBets = []; room.gameState.betsReady = false;
@@ -233,25 +273,7 @@ const setupGameHandler = (io) => {
         await room.save();
 
         io.to(roomCode).emit('phase-changed', { phase: 'choosing', timerEnd: room.gameState.timerEnd, gameState: sanitizeGameState(room.gameState) });
-
-        // 2-minute countdown
-        clearTimer(roomCode);
-        let secs = 120;
-        roomTimers[roomCode] = setInterval(async () => {
-          secs--;
-          io.to(roomCode).emit('timer-tick', { secondsLeft: secs });
-          if (secs <= 0) {
-            clearTimer(roomCode);
-            const r = await Room.findOne({ roomCode });
-            if (r && r.gameState.phase === 'choosing') {
-              const auto = RANKS[randomInt(0, RANKS.length)];
-              r.gameState.chosenValue = auto;
-              r.gameState.phase = 'cutting';
-              await r.save();
-              io.to(roomCode).emit('phase-changed', { phase: 'cutting', chosenValue: auto, autoChosen: true, gameState: sanitizeGameState(r.gameState) });
-            }
-          }
-        }, 1000);
+        startPhaseTimer(io, roomCode, 'choosing', 60);
       } catch (e) { socket.emit('error', { message: e.message }); }
     });
 
@@ -333,8 +355,6 @@ const setupGameHandler = (io) => {
 
         const shuffler = room.players[room.gameState.shufflerIndex];
         const chooser  = room.players[room.gameState.chooserIndex];
-        if (shuffler.userId.toString() === uid || chooser.userId.toString() === uid)
-          return socket.emit('error', { message: 'Active players cannot place spectator bets' });
         if (shuffler.userId.toString() !== targetUserId && chooser.userId.toString() !== targetUserId)
           return socket.emit('error', { message: 'Invalid target' });
 
@@ -367,8 +387,6 @@ const setupGameHandler = (io) => {
 
         const shuffler = room.players[room.gameState.shufflerIndex];
         const chooser = room.players[room.gameState.chooserIndex];
-        if (shuffler.userId.toString() === uid || chooser.userId.toString() === uid)
-          return socket.emit('error', { message: 'Active players cannot match spectator bets' });
 
         const betIndex = room.gameState.roundBets.findIndex(b => b.id === betId);
         if (betIndex === -1) return socket.emit('error', { message: 'Bet not found' });
@@ -508,10 +526,10 @@ const revealCards = async (io, roomCode) => {
 
     await room.save();
     cardIndex++;
-    setTimeout(step, 600);
+    setTimeout(step, 1200);
   };
 
-  setTimeout(step, 800);
+  setTimeout(step, 1200);
 };
 
 // ─── Process Round Result ─────────────────────────────────────────────────────
@@ -592,7 +610,10 @@ const processResult = async (io, roomCode, winner, loser) => {
   setTimeout(async () => {
     const r = await Room.findOne({ roomCode });
     if (r && r.gameState.phase === 'shuffling') {
-      io.to(roomCode).emit('phase-changed', { phase: 'shuffling', gameState: sanitizeGameState(r.gameState) });
+      r.gameState.timerEnd = new Date(Date.now() + 60_000);
+      await r.save();
+      io.to(roomCode).emit('phase-changed', { phase: 'shuffling', timerEnd: r.gameState.timerEnd, gameState: sanitizeGameState(r.gameState) });
+      startPhaseTimer(io, roomCode, 'shuffling', 60);
     }
   }, 5000);
 };

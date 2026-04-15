@@ -247,10 +247,8 @@ function renderSpecBetsList() {
       `;
     } else {
       // Open bet
-      // We can only match if we're not active players AND not the creator
-      const isShuffler = shuffler && shuffler.userId === myId;
-      const isChooser = chooser && chooser.userId === myId;
-      const canMatch = !isMine && !isShuffler && !isChooser && roomState.gameState.phase === 'betting';
+      // Anyone (who did not create the bet) can match it
+      const canMatch = !isMine && roomState.gameState.phase === 'betting';
 
       return `
         <div style="margin-bottom:6px; padding:6px; background:var(--bg2); border-radius:4px; border:1px dashed var(--border);">
@@ -355,7 +353,7 @@ function showBetPanels() {
   const isShuffler = shuffler && shuffler.userId === myId;
 
   document.getElementById('active-bet-panel').style.display = isActive ? 'block' : 'none';
-  document.getElementById('spec-bet-panel').style.display   = !isActive ? 'block' : 'none';
+  document.getElementById('spec-bet-panel').style.display   = 'block';
   updateChosenDisplays();
   updateBetStatus(gs.activePlayerBets, gs.betsReady);
 
