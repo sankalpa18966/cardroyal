@@ -139,13 +139,25 @@ const setupGameHandler = (io) => {
 
         const room = await Room.create({
           roomCode, name: name.trim(), createdBy: uid,
-          players: [{ userId: uid, username: user.username, points: user.points, seatIndex: 0, socketId: socket.id }],
+          players: [], // Initially empty, populated when they navigate and join
           gameState: { phase: 'waiting', shufflerIndex: 0, chooserIndex: 1 }
         });
 
         socket.join(roomCode);
         socket.emit('room-created', sanitizeRoom(room));
         io.emit('lobby-update', { type: 'added', room: lobbyRoom(room) });
+
+        // Clean up if creator fails to join within 15 seconds (ghost room prevention)
+        setTimeout(async () => {
+          try {
+            const checkRoom = await Room.findOne({ roomCode });
+            if (checkRoom && checkRoom.players.length === 0 && checkRoom.status !== 'finished') {
+              checkRoom.status = 'finished';
+              await checkRoom.save();
+              io.emit('lobby-update', { type: 'removed', roomCode });
+            }
+          } catch (err) {}
+        }, 15000);
       } catch (e) { socket.emit('error', { message: e.message }); }
     });
 
